@@ -47,7 +47,10 @@ extern gboolean dump_routines;
 extern gboolean dump_events;
 extern gboolean use_savepoints;
 extern gint database_counter;
+gchar *i_min;
+gchar *i_max;
 extern guint rows_per_file;
+extern gchar *where_option;
 extern gint non_innodb_table_counter;
 gboolean dump_triggers = FALSE;
 gboolean split_partitions = FALSE;
@@ -62,6 +65,10 @@ static GOptionEntry dump_into_file_entries[] = {
       "Dump partitions into separate files. This options overrides the --rows option for partitioned tables.", NULL},
     {"max-rows", 0, 0, G_OPTION_ARG_INT64, &max_rows,
      "Limit the number of rows per block after the table is estimated, default 1000000", NULL},
+    {"min", 0, 0, G_OPTION_ARG_STRING, &i_min,
+    "Primary Key inndex Minimum where the dump should start from", NULL},
+    {"max", 0, 0, G_OPTION_ARG_STRING, &i_max,
+    "Primary Key inndex Maximum where the dump should start finish", NULL},
     { "no-check-generated-fields", 0, 0, G_OPTION_ARG_NONE, &ignore_generated_fields,
       "Queries related to generated fields are not going to be executed."
       "It will lead to restoration issues if you have generated columns", NULL },
@@ -875,10 +882,10 @@ guint64 estimate_count(MYSQL *conn, char *database, char *table, char *field,
       toclause = g_strdup_printf(" `%s` <= %s", field, escaped);
       g_free(escaped);
     }
-    query = g_strdup_printf("%s WHERE %s %s %s", querybase,
+    query = g_strdup_printf("%s WHERE %s %s %s %s%s", querybase,
                             (from ? fromclause : ""),
-                            ((from && to) ? "AND" : ""), (to ? toclause : ""));
-
+                            ((from && to) ? "AND" : ""), (to ? toclause : ""), where_option ? "AND " : "", where_option ? where_option : "");
+                            
     if (toclause)
       g_free(toclause);
     if (fromclause)
@@ -1011,7 +1018,13 @@ GList *get_chunks_for_table(MYSQL *conn, char *database, char *table,
   case MYSQL_TYPE_INT24:
   case MYSQL_TYPE_SHORT:
     /* Got total number of rows, skip chunk logic if estimates are low */
-    rows = estimate_count(conn, database, table, field, min, max);
+    if (i_min && i_max){
+      rows = estimate_count(conn, database, table, field, i_min, i_max);
+    } else {
+      rows = estimate_count(conn, database, table, field, min, max);
+    }
+    
+    g_message("rows_per_file: %u", rows_per_file);
     if (rows <= rows_per_file)
       goto cleanup;
 
@@ -1019,8 +1032,8 @@ GList *get_chunks_for_table(MYSQL *conn, char *database, char *table,
      * adjustments */
     estimated_chunks = rows / rows_per_file;
     /* static stepping */
-    nmin = strtoul(min, NULL, 10);
-    nmax = strtoul(max, NULL, 10);
+    nmin = (i_min && i_max ) ? strtoul(i_min, NULL, 10) : strtoul(min, NULL, 10);
+    nmax = (i_min && i_max ) ? strtoul(i_max, NULL, 10) : strtoul(max, NULL, 10);
     estimated_step = (nmax - nmin) / estimated_chunks + 1;
     if (estimated_step > max_rows)
       estimated_step = max_rows;
